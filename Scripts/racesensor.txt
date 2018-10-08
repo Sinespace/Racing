@@ -1,0 +1,100 @@
+local channel = "space.sine.racing"
+
+local position = ""
+local avatars = {}
+
+local distance = 20
+local remote = false
+
+local logging = false
+function logger(logEntry)
+  if logging then
+    Space.Log(Space.Scene.PlayerAvatar.Username .. " racesystem " .. string.format("%09.4f", Space.Time) .. " - " .. Space.Host.ExecutingObject.Parent.Name .. " - " .. logEntry)
+  end
+end
+
+function detect()
+  while true do
+    if remote == false then
+      --local hits1 = Space.Physics.RayCast(Space.Host.ExecutingObject.WorldPosition, Space.Host.ExecutingObject.WorldRotation * Vector.Forward, distance)
+      local hits = {}
+      local n = 0
+      local heights = {0, 1.5,3,4.5,6,7.5,9}
+      for k,v in pairs(heights) do
+        local upperPos = Space.Host.ExecutingObject.WorldPosition + Vector.New(0,v,0)
+        local hits2 = Space.Physics.RayCast(upperPos, Space.Host.ExecutingObject.WorldRotation * Vector.Forward, distance)
+        if #hits2 > 0 then
+          for c = 1, #hits2, 1 do
+            n=n+1
+            hits[n]=hits2[c]
+          end
+        end
+      end
+
+      if #hits > 0 then
+        local hit
+        for c = 1, #hits, 1 do
+          local tmp = hits[c]
+          --logger("hit " .. tmp.Object.Name)
+          if tmp.Object.Vehicle ~= nil then
+            --logger("has vehicle")
+            local avatarID = tmp.Object.Vehicle.Driver
+            if avatarID == nil then
+              logger("found vehicle but no driver")
+              logger("vehicle name: " .. tmp.Object.Name)
+            else
+              local avatar = avatarID.Username
+              --logger("avatar name: " .. avatar)
+              --if avatarID.ID == Space.Scene.PlayerAvatar.ID then
+              --  avatar = Space.Scene.PlayerAvatar.Username
+              --  logger("current player, real name is: " .. avatar)
+              --end
+              if avatars[avatar] == nil then
+                logger("tracking: " .. avatar)
+                avatars[avatar] = avatar
+                local data = {}
+                data["command"] = "check"
+                data["position"] = position
+                data["avatar"] = avatar
+                Space.Shared.CallBroadcastFunction(channel, "track", {json.serialize(data)})
+                Space.Network.SendNetworkMessage(channel, data)
+              end
+            end
+          end
+        end
+      end
+    end
+    coroutine.yield(0)
+  end
+end
+
+function process(data, isNetwork)
+  logger("got command: " .. json.serialize(data))
+  if data["command"] == "reset" then
+    avatars = {}
+    remote = false
+  elseif data["command"] == "start" then
+    avatars = {}
+    remote = isNetwork
+  elseif data["command"] == "check" and data["position"] ~= position then
+    avatars[data["avatar"]] = nil
+  end
+end
+
+function onRecieveNetwork(data)
+  local arguments = data.Message
+  process(arguments, true)
+end
+
+function onRecieveBroadcast(data)
+  local arguments = json.parse(data)
+  process(arguments, false)
+end
+
+function init(pos)
+  position = pos
+
+  Space.Host.StartCoroutine(detect)
+  Space.Network.SubscribeToNetwork(channel, onRecieveNetwork)
+  Space.Shared.RegisterBroadcastFunction(channel, "track", onRecieveBroadcast)
+end

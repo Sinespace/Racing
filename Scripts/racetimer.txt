@@ -1,0 +1,214 @@
+local channel = "space.sine.racing"
+
+local myId
+
+local avatars = {}
+
+local racing = false
+local locked = false
+
+local logging = false
+function logger(logEntry)
+  if logging then
+    Space.Log(Space.Scene.PlayerAvatar.Username .. " racesystem " .. string.format("%09.4f", Space.Time) .. " - " .. Space.Host.ExecutingObject.Parent.Name .. " - " .. logEntry)
+  end
+end
+
+function startRace()
+  if racing == false then
+    logger("startRace")
+    avatars = {}
+    racing = true
+    locked = false
+    local data = {}
+    data["command"] = "start"
+    data["sender"] = Space.Scene.PlayerAvatar.ID
+    Space.Shared.CallBroadcastFunction(channel, "track", {json.serialize(data)})
+    Space.Network.SendNetworkMessage(channel, data)
+    Space.Host.InvokeEvent("hideStart")
+    refreshDisplay()
+  end
+end
+
+function resetRace()
+  if racing == false or (racing and locked == false) then
+    logger("resetRace")
+    avatars = {}
+    racing = false
+    locked = false
+    local data = {}
+    data["command"] = "reset"
+    data["sender"] = Space.Scene.PlayerAvatar.ID
+    Space.Shared.CallBroadcastFunction(channel, "track", {json.serialize(data)})
+    Space.Network.SendNetworkMessage(channel, data)
+    Space.Host.InvokeEvent("showStart")
+    refreshDisplay()
+  else
+    logger("I'm not the master or no race is running")
+  end
+end
+
+function refreshDisplay()
+  logger("updating display")
+  local names = ""
+  local times = ""
+
+  for k,v in pairs(avatars) do
+    names = names .. k .. "\n"
+    local time = v["end"]
+    if time ~= nil and v["start"] ~= nil then
+      local taken = time - v["start"]
+      if taken < 0 then
+        taken = v["cache"]
+      else
+        v["cache"] = taken
+      end
+      times = times .. string.format("%09.2f", taken) .. "\n"
+    else
+      times = times .. "\n"
+    end
+  end
+
+  Space.Host.GetReference("names").UIText.Text = names
+  Space.Host.GetReference("times").UIText.Text = times
+  Space.Host.GetReference("names2").UIText.Text = names
+  Space.Host.GetReference("times2").UIText.Text = times
+
+  if racing and locked == false then
+    logger("sending results")
+    local data = {}
+    data["command"] = "times"
+    data["names"] = names
+    data["times"] = times
+    data["sender"] = Space.Scene.PlayerAvatar.ID
+    Space.Network.SendNetworkMessage(channel, data)
+  end
+end
+
+function process(data, isNetwork)
+  logger("got command: " .. json.serialize(data))
+  if data["sender"] == Space.Scene.PlayerAvatar.ID and Space.InEditor then
+    logger("sender is own avatar")
+    return
+  end
+  if data["command"] == "check" then
+    logger("got check, racing " .. tostring(racing) .. ", locked " .. tostring(locked))
+    if racing == false or (racing and locked == false) then
+      logger("processing check")
+      if avatars[data["avatar"]] == nil then
+        logger("avatar first contact")
+        avatars[data["avatar"]] = {}
+      end
+      if data["position"] == "start" then
+        logger("writing start time")
+        avatars[data["avatar"]]["start"] = Space.Time
+        refreshDisplay()
+      elseif data["position"] == "end" then
+        logger("writing end time")
+        avatars[data["avatar"]]["end"] = Space.Time
+        refreshDisplay()
+      end
+    end
+  elseif data["command"] == "start" and isNetwork then
+    logger("got start, racing true, locked true")
+    avatars = {}
+    racing = true
+    locked = true
+    Space.Host.InvokeEvent("hideStart")
+    refreshDisplay()
+  elseif data["command"] == "reset" and isNetwork then
+    logger("got reset, racing false, locked false")
+    avatars = {}
+    racing = false
+    locked = false
+    Space.Host.InvokeEvent("showStart")
+    refreshDisplay()
+  elseif data["command"] == "getLast" and isNetwork then
+    logger("got getLast, sending display data")
+    local send = {}
+    send["command"] = "setLast"
+    send["avatars"] = avatars
+    Space.Network.SendNetworkMessage(channel .. "_" .. myId, send)
+  elseif data["command"] == "setLast" and waitingGetLast and isNetwork then
+    waitingGetLast = false
+    avatars = data["avatars"]
+    logger("got setLast, updating display data " .. json.serialize(data))
+  elseif data["command"] == "times" and isNetwork then
+    logger("got update text")
+    Space.Host.GetReference("names").UIText.Text = data["names"]
+    Space.Host.GetReference("times").UIText.Text = data["times"]
+    Space.Host.GetReference("names2").UIText.Text = names
+    Space.Host.GetReference("times2").UIText.Text = times
+  end
+end
+
+function onRecieveNetwork(data)
+  local arguments = data.Message
+  logger("got network")
+  process(arguments, true)
+end
+
+function onRecieveBroadcast(data)
+  local arguments = json.parse(data)
+  logger("got broadcast")
+  process(arguments, false)
+end
+
+
+function zoomIn()
+  local obj = Space.Host.GetReference("focus")
+  --logger("obj: " .. obj.Name)
+  --logger("parent: " .. obj.Parent.Name)
+  local baseScale = obj.WorldScale
+  --logger("parent scale: " .. tostring(obj.Parent.WorldScale))
+  local tmpSize = baseScale.Y
+  --logger("tmpSize Y " .. tostring(tmpSize))
+  if baseScale.Z > tmpSize then
+    tmpSize = baseScale.Z
+    logger("tmpSize Z " .. tostring(tmpSize))
+  end
+  if tmpSize < 0.8 then
+    tmpSize = 0.8
+  end
+  --logger("tmpSize result: " .. tostring(tmpSize))
+  local VectorPos = obj.WorldPosition + obj.WorldRotation * Vector.New(tmpSize, 0, 0)
+  --logger("Focus - local position: " .. tostring(VectorPos))
+  local VectorRot = obj.WorldRotation * Quaternion.Euler(0,-90,0);
+  --logger("Focus - local rotation: " .. tostring(VectorRot))
+
+--logger("Focus - lock camera")
+  Space.Camera.LockCamera (obj);
+  --logger("Focus - set orientation")
+  Space.Camera.SetCameraPositionOrientation (VectorPos,VectorRot)
+end
+
+function zoomOut()
+  if Space.Camera.IsLocked then
+    logger("releasing old lock first")
+    Space.Camera.ReleaseCamera()
+  end
+end
+
+function onDelayInit()
+  if Space.InEditor then
+    myId = "localtest"
+  else
+    myId = Space.Host.ExecutingObject.GlobalID
+  end
+  --if myId == nil then
+  --  Space.Log("no global id")
+  --  myId = "fubartemplocal"
+  --end
+  Space.Network.SubscribeToNetwork(channel .. "_" .. myId, onRecieveNetwork)
+
+  local send = {}
+  send["command"] = "getLast"
+  Space.Network.SendNetworkMessage(channel, send)
+end
+
+function init(pos)
+  Space.Network.SubscribeToNetwork(channel, onRecieveNetwork)
+  Space.Shared.RegisterBroadcastFunction(channel, "track", onRecieveBroadcast)
+
+  Space.Host.InvokeDelayed(onDelayInit, 5)
+end
