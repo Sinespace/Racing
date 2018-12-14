@@ -35,3 +35,23 @@ sysinfo.txt
 *.apk
 *.unitypackage
 *.meta
+/Library
+/ProjectSettings
+/Temp
+/UnityPackageManager
+/Assets/SpacePack
+/Assets/Standard Assets
+/Assets/Artist Project.meta
+/Assets/Editor Default Resources.meta
+/Assets/Lighting Presets.meta
+/Assets/Plugins.meta
+/Assets/Runtime Project.meta
+/Assets/Sample Art.meta
+/Assets/SpacePack.meta
+/Assets/Standard Assets.meta
+/Assets/Artist Project
+/Assets/Editor Default Resources
+/Assets/Lighting Presets
+/Assets/Plugins
+/Assets/Runtime Project
+/Assets/Sample Art
