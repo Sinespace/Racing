@@ -1,0 +1,326 @@
+local channel = "sine.space/racing"
+
+local channelKey = "sens_" .. Space.Host.ExecutingObject.GlobalID
+
+local position = -1
+
+local distance = 20
+
+local lapTable = {}
+local lastTable = {}
+local config
+
+function detect()
+  logger.log("entering detection coroutine")
+  while true do
+    local hits = {}
+    local n = 0
+    local heights = {-0.5, 0, 0.5, 1.5,3,4.5,6,7.5,9}
+    for k,v in pairs(heights) do
+      local upperPos = Space.Host.ExecutingObject.WorldPosition + Vector.New(0,v,0)
+      local hits2 = Space.Physics.RayCast(upperPos, Space.Host.ExecutingObject.WorldRotation * Vector.Forward, distance)
+      if #hits2 > 0 then
+        for c = 1, #hits2, 1 do
+          n=n+1
+          hits[n]=hits2[c]
+        end
+      end
+    end
+
+    if #hits > 0 then
+      --logger.log("got hit")
+      local hit
+      for c = 1, #hits, 1 do
+        local tmp = hits[c]
+        --logger.log("hit " .. tmp.Object.Name)
+        if tmp.Object.Vehicle ~= nil then
+          logger.log("has vehicle")
+          local avatarID = tmp.Object.Vehicle.Driver
+          if avatarID == nil then
+            logger.log("found vehicle but no driver")
+            logger.log("vehicle name: " .. tmp.Object.Name)
+          else
+            Space.Log(avatarID, true)
+            local avatar = avatarID.Username
+            logger.log("avatar name: " .. avatar)
+            if avatarID.ID == Space.Scene.PlayerAvatar.ID and lastTable["lastgate"] ~= position then
+              local cont = 0
+              for k,v in pairs(lapTable) do
+                cont = cont + 1
+              end
+              logger.log("got checkpoints", cont)
+              local index = position
+              if position == "start" then
+                index = 0
+              end
+              logger.log("checkpoint index", index)
+              local valid = false
+              if index > 0 then
+                logger.log("last checkpoint", "cp_" .. tostring(index - 1))
+                valid = lapTable["cp_" .. tostring(index - 1)]["passed"]
+              else
+                logger.log("current is start", lapTable["cp_0"])
+                if lapTable["cp_0"]["passed"] then
+                  logger.log("last checkpoint is", "cp_" .. tostring(cont - 1))
+                  valid = lapTable["cp_" .. tostring(cont - 1)]["passed"]
+                else
+                  valid = true
+                end
+              end
+              logger.log("gate valid", valid)
+              if valid then
+                lastTable["lastgate"] = index
+                if position == 0 then
+                  logger.log("resetting passed list for new lap")
+                  Space.Shared.CallFunction(channel, "lap", {})
+                  for k,v in pairs(lapTable) do
+                    lapTable[k]["passed"] = false
+                  end
+                end
+                logger.log("tracking ", avatar)
+                lapTable["cp_" .. tostring(index)]["passed"] = true
+                logger.log("passed", lapTable)
+              else
+                logger.log("skipped checkpoint", avatar)
+                logger.log("passed", lapTable)
+                local lastIndex
+                for i=0,cont -1 do
+                  local index = "cp_" .. tostring(i)
+                  logger.log("testing index", index)
+                  if lapTable[index]["passed"] then
+                    lastIndex = index
+                  else
+                    Space.Dialogues.SendLocalChat("You missed the previous checkpoint, returning you to the last one you passed!", "Race checkpoint")
+                    logger.log("returning to checkpoint", lapTable[lastIndex])
+                    tmp.Object.WorldPosition = lapTable[lastIndex]["location"].WorldPosition
+                    tmp.Object.WorldRotation = lapTable[lastIndex]["location"].WorldRotation
+                    tmp.Object.Rigidbody.Velocity = Vector.New(0,0,0)
+                    tmp.Object.Rigidbody.AngularVelocity = Vector.New(0,0,0)
+                    break
+                  end
+                end
+                logger.log("last checkpoint", tostring(lastIndex))
+              end
+            else
+              logger.log("unexpected avatar (not player) or same as last gate")
+            end
+          end
+        --else
+        --  logger.log("No vehicle found")
+        end
+      end
+    end
+    coroutine.yield(0)
+  end
+end
+
+function refreshLapTable()
+  logger.log("refreshLapTable")
+  lapTable = Space.Shared.GetGlobal(channel, "checkpoints")
+  if lapTable == nil then
+    logger.log("empty lap table")
+    lapTable = {}
+    Space.Shared.SetGlobal(channel, "checkpoints", lapTable)
+  end
+  if lapTable["cp_" .. tostring(position)] == nil then
+    logger.log("my pos as unset, setting")
+    lapTable["cp_" .. tostring(position)] = {}
+    lapTable["cp_" .. tostring(position)]["passed"] = false
+    lapTable["cp_" .. tostring(position)]["location"] = Space.Host.GetReference("landing")
+  end
+  if position > 0 and Space.Host.GetReference("display") ~= nil then
+    Space.Host.GetReference("display").UIText.Text = "Checkpoint " .. tostring(position)
+  end
+  lastTable = Space.Shared.GetGlobal(channel, "lastTable")
+  if lastTable == nil then
+    lastTable = {}
+    Space.Shared.SetGlobal(channel, "lastTable", lastTable)
+    lastTable["lastgate"] = -1
+  end
+end
+
+function updateCheckpointNumber()
+  local cp = Space.Host.GetReference("number").UIInputField.Text
+  if tonumber(cp) ~= nil then
+    lapTable["cp_" .. tostring(position)] = nil
+    position = tonumber(cp)
+    config["position"] = position
+    logger.log("setting new value to persistence", config)
+    Space.Persistence.SetValue(channelKey, json.serialize(config))
+    if Space.Host.ExecutingObject.Root.Furniture then
+      Space.Host.ExecutingObject.Root.Furniture.StoreCustomData(channelKey, json.serialize(config))
+    end
+    -- Space.Persistence.UpdateInfo(onCompleteDummy)
+    lapTable["cp_" .. tostring(position)] = {}
+    lapTable["cp_" .. tostring(position)]["passed"] = false
+    lapTable["cp_" .. tostring(position)]["location"] = Space.Host.GetReference("landing")
+    lastTable["lastgate"] = -1
+    if position > 0 and Space.Host.GetReference("display") ~= nil then
+      Space.Host.GetReference("display").UIText.Text = "Checkpoint " .. tostring(position)
+    end
+    local data = {}
+    data["command"] = "position"
+    data["position"] = position
+    Space.Network.SendNetworkMessage(channelKey, data)
+  end
+end
+
+function process(data, isNetwork)
+  logger.log("got command: " .. json.serialize(data))
+  if data["command"] == "reset" then
+    refreshLapTable()
+    lastTable["lastgate"] = -1
+    remote = false
+  elseif data["command"] == "start" then
+    lapTable["cp_" .. tostring(position)]["passed"] = false
+    lapTable["cp_" .. tostring(position)]["location"] = Space.Host.GetReference("landing")
+    lastTable["lastgate"] = -1
+    remote = isNetwork
+  elseif data["command"] == "cleargate" then
+    lapTable["cp_" .. tostring(position)]["passed"] = false
+    lastTable["lastgate"] = -1
+  end
+end
+
+function onRecieveNetwork(data)
+  local arguments = data.Message
+  process(arguments, true)
+end
+
+function onRecieveBroadcast(data)
+  process(data, false)
+end
+
+function onNetworkRecieve(message)
+  arguments = message.Message
+  if arguments["command"] == "position" then
+    lapTable["cp_" .. tostring(position)] = nil
+    position = tonumber(arguments["position"])
+    lapTable["cp_" .. tostring(position)] = {}
+    lapTable["cp_" .. tostring(position)]["passed"] = false
+    lapTable["cp_" .. tostring(position)]["location"] = Space.Host.GetReference("landing")
+    lastTable["lastgate"] = -1
+    if position > 0 and Space.Host.GetReference("display") ~= nil then
+      Space.Host.GetReference("display").UIText.Text = "Checkpoint " .. tostring(position)
+    end
+  end
+
+end
+
+function onCompleteDummy()
+  logger.log("persistence save complete")
+end
+
+function processConfig()
+  if config == nil then
+    logger.log("no config value detected")
+    config = {}
+    config["position"] = position
+    logger.log("storing updated position")
+    Space.Persistence.SetValue(channelKey, json.serialize(config))
+    if Space.Host.ExecutingObject.Root.Furniture then
+      Space.Host.ExecutingObject.Root.Furniture.StoreCustomData(channelKey, json.serialize(config))
+    end
+  else
+    logger.log("config value detected", config)
+    config = json.parse(config)
+    position = config["position"]
+  end
+
+  refreshLapTable()
+
+  logger.log("starting coroutine")
+  Space.Host.StartCoroutine(detect)
+  -- Space.Network.SubscribeToNetwork(channel, onRecieveNetwork)
+  Space.Shared.RegisterBroadcastFunction(channel, "command", onRecieveBroadcast)
+  Space.Shared.RegisterBroadcastFunction(channel, "cleargate", onRecieveBroadcast)
+
+  Space.Network.SubscribeToNetwork(channelKey, onNetworkRecieve)
+  logger.log("init complete")
+
+  if position == -1 then
+    logger.log("no spec'd position, trying name")
+    -- still default position value, keep checking for changes
+    Space.Host.StartCoroutine(checkNameChange)
+  end
+end
+
+function onPersistenceUpdateComplete()
+  logger.log("processing persistence data")
+  config = Space.Persistence.RetrieveValue(channelKey)
+  processConfig(config)
+end
+
+function checkNameChange()
+  while true do
+    local name = Space.Host.ExecutingObject.Parent.Name
+    if Space.Host.ExecutingObject.Root.Furniture then
+      name = Space.Host.ExecutingObject.Root.Name
+    end
+
+    local gate = string.match(name, "%((%d*)%)")
+    --logger.log("got gate", gate)
+    pos = -1
+    if gate ~= nil and gate ~= "" and tonumber(gate) > 0 then
+      --logger.log("using gate number from name", gate)
+      pos = tonumber(gate)
+    end
+
+    if pos == -1 and position == -1 then
+      pos = 1
+    end
+
+    if pos ~= position and pos > 0 then
+      logger.log("updating gate number from name", gate)
+      lapTable["cp_" .. tostring(position)] = nil
+      position = tonumber(pos)
+      config["position"] = position
+      logger.log("setting new value to persistence", config)
+      Space.Persistence.SetValue(channelKey, json.serialize(config))
+      if Space.Host.ExecutingObject.Root.Furniture then
+        Space.Host.ExecutingObject.Root.Furniture.StoreCustomData(channelKey, json.serialize(config))
+      end
+      -- Space.Persistence.UpdateInfo(onCompleteDummy)
+      lapTable["cp_" .. tostring(position)] = {}
+      lapTable["cp_" .. tostring(position)]["passed"] = false
+      lapTable["cp_" .. tostring(position)]["location"] = Space.Host.GetReference("landing")
+      lastTable["lastgate"] = -1
+      if position > 0 and Space.Host.GetReference("display") ~= nil then
+        Space.Host.GetReference("display").UIText.Text = "Checkpoint " .. tostring(position)
+      end
+      local data = {}
+      data["command"] = "position"
+      data["position"] = position
+      Space.Network.SendNetworkMessage(channelKey, data)
+    end
+
+    coroutine.yield(10)
+  end
+end
+
+function init(pos)
+  logger.log("starting sensor")
+
+  logger.log("requesting persistence data")
+  position = pos
+
+  if Space.Scene.PlayerIsOwner then
+    Space.Host.InvokeEvent("showOwner")
+  end
+
+  logger.log("Channel key is: ", channelKey)
+
+  config = nil
+  if Space.Host.ExecutingObject.Root.Furniture then
+    config = Space.Host.ExecutingObject.Root.Furniture.GetCustomData(channelKey)
+    if config ~= nil and config ~= "" then
+      logger.log("got config from furniture", config)
+      processConfig(config)
+    end
+  end
+  if config == nil or config == "" then
+    logger.log("no config from furniture, trying persistence")
+    Space.Persistence.UpdateInfo(onPersistenceUpdateComplete)
+    Space.Host.InvokeDelayed(onPersistenceUpdateComplete, 10)
+  end
+end

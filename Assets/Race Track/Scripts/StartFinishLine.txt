@@ -1,0 +1,43 @@
+local channel = "sine.space/racing"
+
+local lineController = {}
+lineController.handleCommand = function(arguments)
+  logger.log("handle command", arguments)
+  if arguments ~= nil and type(arguments) == "table" then
+    if arguments["command"] == "start" then
+      Space.Dialogues.SendLocalChat("Get ready for racing!", "Race starter")
+      Space.Host.GetReference("wait").UIText.Text = "Preparing for race\nLaps: " .. tostring(arguments["laps"])
+
+      Space.Host.InvokeEvent("start")
+    elseif arguments["command"] == "reset" then
+      Space.Host.InvokeEvent("reset")
+    end
+  end
+end
+
+lineController.onBroadcast = function(message)
+  logger.log("onBroadcast", message)
+  lineController.handleCommand(message)
+end
+
+lineController.onRecieve = function(message)
+  logger.log("handleNetworkMessage", message)
+  arguments = message.Message
+  lineController.handleCommand(arguments)
+end
+
+lineController.init = function()
+  logger.log("init")
+  Space.Shared.RegisterBroadcastFunction(channel, "command", lineController.onBroadcast)
+  Space.Network.SubscribeToNetwork(channel, lineController.onRecieve)
+end
+
+function startTimer()
+  local update = {}
+  update["command"] = "cleargate"
+  Space.Shared.CallBroadcastFunction(channel, "cleargate", {update})
+end
+
+function init()
+  lineController.init()
+end

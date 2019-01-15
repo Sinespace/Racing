@@ -1,0 +1,27 @@
+logger = {enabled = false}
+logger.log =
+    function(logEntry, data)
+    if logger.enabled then
+        local payload = ''
+        if data ~= nil then
+            if type(data) == 'table' then
+                payload = ' - (table) length: ' .. tostring(#data) .. ' - values: ' .. json.serialize(data)
+            else
+                payload = ' - ' .. tostring(data)
+            end
+        end
+        if Space.Host.ExecutingObject.Root.Name ~= Space.Host.ExecutingObject.Name then
+            Space.Log(
+                string.format('%09.4f', Space.Time) ..
+                    ' - ' ..
+                        Space.Host.ExecutingObject.Root.Name ..
+                            ' - ' .. Space.Host.ExecutingObject.Name .. ' - ' .. logEntry .. payload
+            , true)
+        else
+            Space.Log(
+                string.format('%09.4f', Space.Time) ..
+                    ' - ' .. Space.Host.ExecutingObject.Name .. ' - ' .. logEntry .. payload
+            , true)
+        end
+    end
+end

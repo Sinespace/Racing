@@ -1,0 +1,427 @@
+local channel = "sine.space/racing"
+
+local channelKey = "disp_" .. Space.Host.ExecutingObject.GlobalID
+
+local config = {}
+
+local racers = {}
+
+local display = {}
+display.racing = false
+display.raceStart = 0
+
+display.startRace = function(isLocal)
+  logger.log("starting race")
+
+  display.resetRace()
+
+  Space.Host.InvokeEvent("startRace")
+
+  display.raceStart = Space.Time
+  display.racing = true
+
+  if isLocal then
+    local data = {}
+    data["command"] = "start"
+    data["laps"] = config["laps"]
+    data["raceStart"] = display.raceStart
+    Space.Network.SendNetworkMessage(channel, data)
+  end
+
+  local update = {}
+  update["command"] = "start"
+  update["laps"] = config["laps"]
+  Space.Shared.CallBroadcastFunction(channel, "command", {update})
+end
+
+display.resetRace = function(isLocal)
+  logger.log("resetting race")
+  Space.Host.InvokeEvent("resetRace")
+
+  Space.Shared.SetGlobal(channel, "checkpoints", nil)
+  racers = {}
+  display.updateText()
+
+  local update = {}
+  update["command"] = "reset"
+  Space.Shared.CallBroadcastFunction(channel, "command", {update})
+
+  if isLocal then
+    Space.Network.SendNetworkMessage(channel, update)
+  end
+end
+
+display.raceMode = function(isLocal)
+  Space.Host.InvokeEvent("setRaceMode")
+
+  if isLocal then
+    local update = {}
+    update["command"] = "racemode"
+    Space.Network.SendNetworkMessage(channel, update)
+  end
+end
+
+display.lapMode = function(isLocal)
+  Space.Host.InvokeEvent("setLapMode")
+
+  if isLocal then
+    local update = {}
+    update["command"] = "lapmode"
+    Space.Network.SendNetworkMessage(channel, update)
+  end
+end
+
+sortResults = function(record1, record2)
+  if (record1["lapcount"] > record2["lapcount"]) then
+    return true
+  elseif (record1["lapcount"] < record2["lapcount"]) then
+    return false
+  else
+    return record1["alltime"] < record2["alltime"]
+  end
+end
+
+display.updateText = function()
+  local names = ""
+  local times = ""
+  local laps = ""
+  local results = {}
+  logger.log("racers before procssing", racers)
+  for k,v in pairs(racers) do
+    logger.log("handling racer", v)
+    local tmp = {}
+
+    tmp["name"] = v["name"]
+    tmp["alltime"] = v["alltime"]
+    tmp["lapcount"] = v["lapcount"]
+    results[#results + 1] = tmp
+  end
+  logger.log("results before sorting", results)
+  table.sort(results, sortResults)
+  logger.log("results after sorting", results)
+  for k,v in ipairs(results) do
+    names = names .. v["name"] .. "\n"
+    times = times .. string.format("%0.2f", v["alltime"]) .. "\n"
+    laps = laps .. v["lapcount"] .. "\n"
+  end
+  Space.Host.GetReference("names").UIText.Text = names
+  Space.Host.GetReference("times").UIText.Text = times
+  Space.Host.GetReference("lapsdone").UIText.Text = laps
+  Space.Host.GetReference("hudnames").UIText.Text = names
+  Space.Host.GetReference("hudtimes").UIText.Text = times
+  Space.Host.GetReference("hudlapsdone").UIText.Text = laps
+end
+
+display.onLap = function(data)
+  logger.log("Lap !")
+  local id = tostring(Space.Scene.PlayerAvatar.ID)
+  logger.log("before count", racers)
+  if racers[id] == nil then
+    racers[id] = {}
+    racers[id]["name"] = Space.Scene.PlayerAvatar.Username
+    if display.racing then
+      racers[id]["starttime"] = display.raceStart
+    else
+      racers[id]["starttime"] = Space.Time
+    end
+    racers[id]["laptime"] = Space.Time - racers[id]["starttime"]
+    racers[id]["alltime"] = racers[id]["laptime"]
+    racers[id]["lapcount"] = 0
+  else
+    if display.racing == false or racers[id]["lapcount"] < config["laps"] then
+      racers[id]["laptime"] = Space.Time - racers[id]["alltime"] - racers[id]["starttime"]
+      racers[id]["alltime"] = racers[id]["alltime"] + racers[id]["laptime"]
+      racers[id]["lapcount"] = racers[id]["lapcount"] + 1
+    end
+  end
+  racers[id]["lapstart"] = Space.Time
+  logger.log("storing to shard", racers)
+  Space.Network.SetShardProperty(channelKey, json.serialize(racers))
+  if racers[id]["lapcount"] > 0 then
+    if display.racing and racers[id]["lapcount"] == config["laps"] then
+      logger.log("race complete, notifying")
+      Space.Dialogues.SendLocalChat(racers[id]["name"] .. " finished the race in " .. string.format("%0.2f", racers[id]["alltime"]) .. "seconds!", "Race starter")
+    elseif display.racing then
+      logger.log("lap complete, notifying")
+      Space.Dialogues.SendLocalChat(racers[id]["name"] .. " completed the " .. tostring(racers[id]["lapcount"]) .. " lap in " .. string.format("%0.2f", racers[id]["laptime"]) .. "seconds, overall time " .. string.format("%0.2f", racers[id]["alltime"]) .. " seconds!", "Race starter")
+    else
+      logger.log("lap complete, notifying")
+      Space.Dialogues.SendLocalChat(racers[id]["name"] .. " completed a lap in, " .. string.format("%0.2f", racers[id]["laptime"]) .. "seconds!", "Race starter")
+    end
+  else
+    logger.log("joined on track, notifying")
+    Space.Dialogues.SendLocalChat(racers[id]["name"] .. " joined in!", "Race starter")
+  end
+  local data = {}
+  data["command"] = "laptime"
+  data["id"] = id
+  data["name"] = Space.Scene.PlayerAvatar.Username
+  data["laptime"] = racers[id]["laptime"]
+  data["alltime"] = racers[id]["alltime"]
+  data["lapcount"] = racers[id]["lapcount"]
+  logger.log("send network update", data)
+  Space.Network.SendNetworkMessage(channel, data)
+
+  display.updateText()
+end
+
+display.handleCommand = function(arguments)
+  logger.log("handle command", arguments)
+  if arguments ~= nil and type(arguments) == "table" then
+    if arguments["command"] == "start" then
+      display.startRace(false)
+    elseif arguments["command"] == "reset" then
+      display.resetRace(false)
+    elseif arguments["command"] == "racemode" then
+      display.raceMode(false)
+    elseif arguments["command"] == "lapmode" then
+      display.lapMode(false)
+    elseif arguments["command"] == "cleargate" then
+      logger.log("start race!")
+      display.raceStart = Space.Time
+    elseif arguments["command"] == "laptime" and arguments["id"] ~= Space.Scene.PlayerAvatar.ID then
+      logger.log("before laptime command", racers)
+      local id = tostring(arguments["id"])
+      if racers[id] == nil then
+        racers[id] = {}
+      end
+      racers[id]["name"] = arguments["name"]
+      racers[id]["laptime"] = arguments["laptime"]
+      racers[id]["alltime"] = arguments["alltime"]
+      racers[id]["lapcount"] = arguments["lapcount"]
+      logger.log("setting data", racers[id])
+      logger.log("after laptime command", racers)
+      if arguments["lapcount"] > 0 then
+        if display.racing and arguments["lapcount"] == config["laps"] then
+          logger.log("remote complete, notifying")
+          Space.Dialogues.SendLocalChat(arguments["name"] .. " finished the race in " .. string.format("%0.2f", arguments["alltime"]) .. "seconds!", "Race starter")
+        elseif racing then
+          logger.log("race lap complete, notifying")
+          Space.Dialogues.SendLocalChat(arguments["name"] .. " completed the " .. tostring(arguments["lapcount"]) .. " lap in " .. string.format("%0.2f", arguments["laptime"]) .. "seconds, overall time " .. string.format("%0.2f", arguments["alltime"]) .. " seconds!", "Race starter")
+        else
+          logger.log("lap complete, notifying")
+          Space.Dialogues.SendLocalChat(arguments["name"] .. " completed a lap " .. string.format("%0.2f", arguments["laptime"]) .. "seconds!", "Race starter")
+        end
+      else
+        logger.log("joined on track, notifying")
+        Space.Dialogues.SendLocalChat(arguments["name"] .. " joined in!", "Race starter")
+      end
+      display.updateText()
+    elseif arguments["command"] == "laps" then
+      config["laps"] = arguments["laps"]
+      refreshLapTable()
+    end
+  end
+end
+
+display.onBroadcast = function(message)
+  logger.log("onBroadcast", message)
+  display.handleCommand(message)
+end
+
+display.onRecieve = function(message)
+  logger.log("handleNetworkMessage", message)
+  arguments = message.Message
+  display.handleCommand(arguments)
+end
+
+
+function zoomIn()
+  local obj = Space.Host.GetReference("focus")
+  --logger.log("obj: " .. obj.Name)
+  --logger.log("parent: " .. obj.Parent.Name)
+  local baseScale = obj.WorldScale
+  --logger.log("parent scale: " .. tostring(obj.Parent.WorldScale))
+  local tmpSize = baseScale.Y
+  --logger.log("tmpSize Y " .. tostring(tmpSize))
+  if baseScale.Z > tmpSize then
+    tmpSize = baseScale.Z
+    --logger.log("tmpSize Z " .. tostring(tmpSize))
+  end
+  if tmpSize < 0.8 then
+    tmpSize = 0.8
+  end
+  --logger.log("tmpSize result: " .. tostring(tmpSize))
+  local VectorPos = obj.WorldPosition + obj.WorldRotation * Vector.New(tmpSize, 0, 0)
+  --logger.log("Focus - local position: " .. tostring(VectorPos))
+  local VectorRot = obj.WorldRotation * Quaternion.Euler(0,-90,0);
+  --logger.log("Focus - local rotation: " .. tostring(VectorRot))
+
+--logger.log("Focus - lock camera")
+  Space.Camera.LockCamera (obj);
+  --logger.log("Focus - set orientation")
+  Space.Camera.SetCameraPositionOrientation (VectorPos,VectorRot)
+end
+
+function zoomOut()
+  if Space.Camera.IsLocked then
+    --logger.log("releasing old lock first")
+    Space.Camera.ReleaseCamera()
+  end
+end
+
+function startRace()
+  display.startRace(true)
+end
+
+function resetRace()
+  display.resetRace(true)
+end
+
+function setRaceMode()
+  display.raceMode(true)
+end
+
+function setLapMode()
+  display.lapMode(true)
+end
+
+function fillEditLaps()
+  if config == nil then
+    config = {}
+    config["laps"] = 1
+  end
+  Space.Host.GetReference("laps").UIInputField.Text = tostring(config["laps"])
+end
+
+function refreshLapTable()
+  logger.log("updating lap count display")
+  Space.Host.GetReference("lapcount").UIText.Text = tostring(config["laps"])
+  Space.Host.GetReference("hudlapcount").UIText.Text = tostring(config["laps"])
+  Space.Host.GetReference("hudlapcount2").UIText.Text = tostring(config["laps"])
+end
+
+function updateLapsNumber()
+  logger.log("got new lap count")
+  config["laps"] = tonumber(Space.Host.GetReference("laps").UIInputField.Text)
+  if config["laps"] < 1 then
+    config["laps"] = 1
+  end
+  logger.log("new lap count is", config)
+  Space.Persistence.SetValue(channelKey, json.serialize(config))
+  if Space.Host.ExecutingObject.Root.Furniture then
+    Space.Host.ExecutingObject.Root.Furniture.StoreCustomData(channelKey, json.serialize(config))
+  end
+  refreshLapTable()
+  local data = {}
+  data["command"] = "laps"
+  data["laps"] = config["laps"]
+  Space.Network.SendNetworkMessage(channel, data)
+end
+
+function processConfig()
+  if config == nil then
+    logger.log("no config value detected")
+    config = {}
+    config["laps"] = 1
+    logger.log("storing updated position")
+    Space.Persistence.SetValue(channelKey, json.serialize(config))
+    if Space.Host.ExecutingObject.Root.Furniture then
+      Space.Host.ExecutingObject.Root.Furniture.StoreCustomData(channelKey, json.serialize(config))
+    end
+  else
+    logger.log("config value detected", config)
+    config = json.parse(config)
+    laps = config["laps"]
+  end
+
+  refreshLapTable()
+
+  logger.log("board started")
+  Space.Shared.RegisterFunction(channel, "lap", display.onLap)
+  Space.Shared.RegisterBroadcastFunction(channel, "cleargate", display.onBroadcast)
+  Space.Network.SubscribeToNetwork(channel, display.onRecieve)
+  logger.log("init complete")
+end
+
+function onPersistenceUpdateComplete()
+  logger.log("processing persistence data")
+  config = Space.Persistence.RetrieveValue(channelKey)
+  processConfig(config)
+end
+
+display.loadShardData = function(data)
+  logger.log("starting shard load process")
+  while not Space.Network.HasShardProperties do
+    coroutine.yield(0)
+  end
+
+  local tmp = Space.Network.GetShardProperty(channelKey)
+  if tmp ~= nil and tmp ~= "" then
+    logger.log("got shard data", tmp)
+    racers = json.parse(tmp)
+    display.updateText()
+  else
+    logger.log("no shard data, empty board")
+  end
+end
+
+display.formatMilliseconds = function(time)
+  local tmp = (time - Space.Math.Floor(time)) * 100
+  return string.format("%02.0f", tmp)
+end
+
+display.formatSeconds = function(time)
+  local tmp = Space.Math.Floor(time)
+  return string.format("%02.0f:%02.0f", tmp / 60, ((tmp / 60) - Space.Math.Floor(tmp / 60)) * 60)
+end
+
+display.formatSecondMilli = function(time)
+  local tmp = Space.Math.Floor(time)
+  local tmp2 = (time - tmp) * 100
+  return string.format("%02.0f:%02.0f", tmp, tmp2)
+end
+
+display.formatFull = function(time)
+  local tmp = Space.Math.Floor(time)
+  local tmp2 = (time - tmp) * 100
+  return string.format("%02.0f:%02.0f:%02.0f", tmp / 60, ((tmp / 60) - Space.Math.Floor(tmp / 60)) * 60, tmp2)
+end
+
+display.OnUpdate = function()
+  local id = tostring(Space.Scene.PlayerAvatar.ID)
+  if racers[id] ~= nil and racers[id]["starttime"] ~= nil then
+    -- local laptime = Space.Time - racers[id]["alltime"] - racers[id]["starttime"]
+    local laptime = Space.Time - racers[id]["lapstart"]
+    local alltime = Space.Time - racers[id]["alltime"] - racers[id]["starttime"]
+    if display.racing and racers[id]["lapcount"] == config["laps"] then
+      laptime = racers[id]["laptime"]
+      alltime = racers[id]["alltime"]
+    end
+    Space.Host.GetReference("hudlaptime").UIText.Text = display.formatSecondMilli(alltime)
+    Space.Host.GetReference("hudalltimeseconds").UIText.Text = display.formatSeconds(laptime)
+    Space.Host.GetReference("hudalltimemilli").UIText.Text = display.formatMilliseconds(laptime)
+    if racers[id]["lapcount"] ~= nil then
+      Space.Host.GetReference("hudlapsdone2").UIText.Text = tostring(racers[id]["lapcount"])
+    else
+      Space.Host.GetReference("hudlapsdone2").UIText.Text = 1
+    end
+  end
+end
+
+display.init = function()
+  Space.Host.StartCoroutine(display.loadShardData)
+  Space.Host.ExecutingObject.OnUpdate(display.OnUpdate)
+  logger.log("Channel key is: ", channelKey)
+  config = nil
+  if Space.Host.ExecutingObject.Root.Furniture then
+    config = Space.Host.ExecutingObject.Root.Furniture.GetCustomData(channelKey)
+    if config ~= nil and config ~= "" then
+      logger.log("got config from furniture", config)
+      processConfig(config)
+    end
+  end
+  if config == nil or config == "" then
+    logger.log("no config from furniture, trying persistence")
+    Space.Persistence.UpdateInfo(onPersistenceUpdateComplete)
+    Space.Host.InvokeDelayed(onPersistenceUpdateComplete, 10)
+  end
+end
+
+function init()
+  display.init()
+end
+
+-- Space.Log(display.formatMilliseconds(123.23))
+-- Space.Log(display.formatSeconds(123.23))
+-- Space.Log(display.formatFull(123.23))
