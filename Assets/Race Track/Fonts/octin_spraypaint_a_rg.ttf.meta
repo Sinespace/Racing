@@ -1,0 +1,23 @@
+fileFormatVersion: 2
+guid: c6391c16f99dc8e49a6a7eab55fd9925
+timeCreated: 1544790767
+licenseType: Free
+TrueTypeFontImporter:
+  externalObjects: {}
+  serializedVersion: 4
+  fontSize: 16
+  forceTextureCase: -2
+  characterSpacing: 0
+  characterPadding: 1
+  includeFontData: 1
+  fontName: Octin Spraypaint
+  fontNames:
+  - Octin Spraypaint
+  fallbackFontReferences: []
+  customCharacters: 
+  fontRenderingMode: 0
+  ascentCalculationMode: 1
+  useLegacyBoundsCalculation: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
